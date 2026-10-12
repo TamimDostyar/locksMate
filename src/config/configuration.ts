@@ -8,4 +8,4 @@ const database_Host = process.env.DATABASE_HOST
 const database_port = process.env.PORT
 const database_user = process.env.USER
 
-export {databseName, database_Host, database_port, database_user}
+export {databseName, databasePassword, database_Host, database_port, database_user}

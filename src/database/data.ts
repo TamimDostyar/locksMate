@@ -1,31 +1,45 @@
-import { database_Host, databseName,
+import { database_Host, databasePassword, databseName,
     database_port, database_user
- } from "../config/configuration.js";
+} from "../config/configuration.js";
 
+import pg from "pg";
 
-import pg from 'pg'
-
-export class DataManager{
-
-
-    private readonly createTable: string = ``;
-    private readonly insertData: string = ``;
-    private readonly readData: string = ``;
+export class DataManager {
+    private readonly createTable = `CREATE TABLE IF NOT EXISTS locks_mate (url TEXT, email TEXT, password TEXT)`;
+    private readonly insertData = `INSERT INTO locks_mate (url, email, password) VALUES ($1, $2, $3)`;
+    private readonly readData = `SELECT * FROM locks_mate WHERE url = $1`;
 
     private readonly config = {
         user: database_user,
-        
+        password: databasePassword,
+        host: database_Host,
+        port: Number(database_port),
+        database: databseName,
+    };
+
+    async checkDBStatus(): Promise<boolean> {
+        const client = new pg.Client(this.config);
+        try {
+            await client.connect();
+            await client.query("SELECT VERSION()");
+            return true;
+        } catch {
+            return false;
+        } finally {
+            await client.end().catch(() => {});
+        }
     }
 
-    constructor(){}
-
-
-    checkDBStatus(): boolean{
-
-
-
-        return false;
-    }
-    private createDatabase(){
+    async createDatabase(): Promise<void> {
+        if (!(await this.checkDBStatus())) {
+            throw new Error("database unreachable");
+        }
+        const client = new pg.Client(this.config);
+        try {
+            await client.connect();
+            await client.query(this.createTable);
+        } finally {
+            await client.end();
+        }
     }
 }
