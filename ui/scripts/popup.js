@@ -249,18 +249,19 @@ chrome.storage.session.onChanged.addListener(async ({ token }) => {
 });
 
 // start
-[tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-if (tab?.url?.startsWith("http")) site = siteOf(tab.url);
+// whatever goes wrong, never leave the popup on the loading view
+try {
+  [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.url?.startsWith("http")) site = siteOf(tab.url);
 
-if (!(await getToken())) {
-  show("locked");
-} else {
-  try {
+  if (!(await getToken())) {
+    show("locked");
+  } else {
     await load();
     show("vault");
     $("search").focus();
-  } catch (e) {
-    show("locked");
-    if (!e.locked) $("locked-error").textContent = e.message;
   }
+} catch (e) {
+  show("locked");
+  if (!e.locked) $("locked-error").textContent = e.message;
 }
