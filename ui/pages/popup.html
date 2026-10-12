@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LocksMate</title>
+  <link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand"><span class="mark" data-icon="logo"></span>LocksMate</div>
+    <button id="lock" class="icon-btn" title="Lock vault" data-icon="lock" hidden></button>
+  </header>
+
+  <section id="locked" class="center">
+    <div class="mark-lg" data-icon="lock"></div>
+    <h1>Vault locked</h1>
+    <p>Unlock with your master password and Touch ID.</p>
+    <form><button id="unlock" class="primary wide" type="button">Unlock</button></form>
+    <p id="locked-error" class="error"></p>
+  </section>
+
+  <section id="vault" hidden>
+    <div class="search">
+      <span data-icon="search"></span>
+      <input id="search" type="search" placeholder="Search vault" autocomplete="off">
+    </div>
+    <div class="scroll">
+      <div id="site-block" hidden>
+        <h2><span>This site</span><span id="site"></span></h2>
+        <ul id="site-list" class="list"></ul>
+      </div>
+      <h2><span>All logins</span><span id="count"></span></h2>
+      <ul id="list" class="list"></ul>
+      <p id="empty" class="empty" hidden>No logins yet</p>
+    </div>
+    <div class="footer">
+      <button id="add" class="primary wide" type="button"><span data-icon="plus"></span>Add login</button>
+    </div>
+  </section>
+
+  <section id="editor" hidden>
+    <div class="sub-bar">
+      <button id="back" class="icon-btn" type="button" title="Back" data-icon="back"></button>
+      <h3 id="editor-title">New login</h3>
+    </div>
+    <form id="form" class="form">
+      <label>Website <input id="f-site" required placeholder="github.com"></label>
+      <label>Email or username <input id="f-email" required autocomplete="off"></label>
+      <label>Password
+        <div class="pw-field">
+          <input id="f-password" type="password" required autocomplete="new-password">
+          <div class="tools">
+            <button id="reveal" class="icon-btn" type="button" title="Show" data-icon="eye"></button>
+            <button id="generate" class="icon-btn" type="button" title="Generate" data-icon="dice"></button>
+          </div>
+        </div>
+      </label>
+      <button class="primary" type="submit">Save</button>
+      <p id="form-error" class="error"></p>
+    </form>
+  </section>
+
+  <div id="toast" class="toast"></div>
+  <script type="module" src="../scripts/popup.js"></script>
+</body>
+</html>
