@@ -42,4 +42,32 @@ export class DataManager {
             await client.end();
         }
     }
+
+    async insertIntoTable(url:string, email:string, password:string): Promise<void> {
+        if (!(await this.checkDBStatus())) {
+            throw new Error("database unreachable");
+        }
+        const client = new pg.Client(this.config);
+        try {
+            await client.connect();
+            await client.query(this.insertData, [url, email, password]);
+        } finally {
+            await client.end();
+        }
+    }
+
+
+    async readFromTable(url: string): Promise<{ url: string; email: string; password: string }[]> {
+        if (!(await this.checkDBStatus())) {
+            throw new Error("database unreachable");
+        }
+        const client = new pg.Client(this.config);
+        try {
+            await client.connect();
+            const result = await client.query(this.readData, [url]);
+            return result.rows;
+        } finally {
+            await client.end();
+        }
+    }
 }
