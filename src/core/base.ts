@@ -1,7 +1,6 @@
 import express from "express";
 import type { Express, NextFunction, Request, Response } from "express";
 import { randomBytes } from "node:crypto";
-import { applicationPORT } from "../config/configuration.js";
 
 export const app: Express = express();
 app.disable("x-powered-by");
@@ -12,13 +11,12 @@ export function pinOrigin(origin: string): void {
 }
 
 
-const allowedHosts = new Set([`127.0.0.1:${applicationPORT}`, `localhost:${applicationPORT}`]);
-app.use((req, _res, next) => {
-    // Chrome leaves Origin off an extension's GET requests, so only a present, wrong Origin is rejected
-    const origin = req.get("origin");
-    const originOk = origin === undefined || (pinnedOrigin ? origin === pinnedOrigin : origin.startsWith("chrome-extension://"));
-    if (!allowedHosts.has(req.get("host") ?? "") || req.get("x-locksmate") !== "1" || !originOk) {
-        req.socket.destroy();
+// Chrome tells the native host which extension started it, only ours (pinned at setup) is served
+app.use((req, res, next) => {
+    const origin = req.get("origin") ?? "";
+    const ok = pinnedOrigin ? origin === pinnedOrigin : origin.startsWith("chrome-extension://");
+    if (!ok) {
+        res.status(403).json({ error: "forbidden" });
         return;
     }
     next();
@@ -57,8 +55,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 }
 
 export function finishApp(): void {
-    app.use((req: Request) => {
-        req.socket.destroy();
+    app.use((_req: Request, res: Response) => {
+        res.status(404).json({ error: "not found" });
     });
     app.use((_err: unknown, _req: Request, res: Response, _next: NextFunction) => {
         res.status(500).json({ error: "server error" });

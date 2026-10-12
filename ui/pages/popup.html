@@ -11,7 +11,12 @@
     <button id="lock" class="icon-btn" title="Lock vault" data-icon="lock" hidden></button>
   </header>
 
-  <section id="locked" class="center">
+  <section id="loading" class="center">
+    <div class="spinner"></div>
+    <p>Opening vault…</p>
+  </section>
+
+  <section id="locked" class="center" hidden>
     <div class="mark-lg" data-icon="lock"></div>
     <h1>Vault locked</h1>
     <p>Unlock with Touch ID.</p>
@@ -55,7 +60,7 @@
           </div>
         </div>
       </label>
-      <button class="primary" type="submit">Save</button>
+      <button id="save" class="primary" type="submit">Save</button>
       <p id="form-error" class="error"></p>
     </form>
   </section>

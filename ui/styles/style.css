@@ -31,6 +31,7 @@ body {
   width: 360px;
 }
 body.window { width: auto; }
+body.embedded { min-height: 100vh; }
 
 body {
   font: 13px/1.4 system-ui, -apple-system, sans-serif;
@@ -89,6 +90,17 @@ input:focus { border-color: var(--accent); background: var(--bg); }
 .wide { width: 100%; }
 
 .error { color: var(--danger); font-size: 12px; min-height: 16px; }
+.hint { color: var(--muted); font-size: 12px; }
+.hint:empty { display: none; }
+button:disabled { cursor: default; }
+.icon-btn:disabled, .fill:disabled { opacity: 0.5; }
+
+.spinner {
+  width: 26px; height: 26px; margin: 12px 0 4px;
+  border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* vault */
 .search { position: relative; padding: 12px 14px 4px; }

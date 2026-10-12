@@ -1,4 +1,4 @@
-import { api, getToken, clearToken, siteOf, matchesSite } from "./api.js";
+import { api, busy, getToken, clearToken, siteOf, matchesSite } from "./api.js";
 import { icons } from "./icons.js";
 
 const $ = (id) => document.getElementById(id);
@@ -9,8 +9,8 @@ let tab;
 let site = "";
 
 function show(view) {
-  for (const id of ["locked", "vault", "editor"]) $(id).hidden = id !== view;
-  $("lock").hidden = view === "locked";
+  for (const id of ["loading", "locked", "vault", "editor"]) $(id).hidden = id !== view;
+  $("lock").hidden = view === "locked" || view === "loading";
 }
 
 let toastTimer;
@@ -45,8 +45,12 @@ function avatar(entry) {
 }
 
 async function copy(text, label) {
-  await navigator.clipboard.writeText(text);
-  toast(`${label} copied`);
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`${label} copied`);
+  } catch {
+    toast(`Couldn't copy ${label.toLowerCase()}`);
+  }
 }
 
 async function fill(entry) {
@@ -76,9 +80,11 @@ async function remove(entry, button) {
     }, 2500);
     return;
   }
-  await guard(api(`/entries/${entry.id}`, { method: "DELETE" }));
-  await load();
-  toast("Deleted");
+  await busy(button, async () => {
+    await guard(api(`/entries/${entry.id}`, { method: "DELETE" }));
+    await guard(load());
+    toast("Deleted");
+  }).catch(() => {});
 }
 
 function row(entry, onSite) {
@@ -109,7 +115,7 @@ function row(entry, onSite) {
     const fillBtn = document.createElement("button");
     fillBtn.className = "fill";
     fillBtn.textContent = "Fill";
-    fillBtn.addEventListener("click", () => fill(entry));
+    fillBtn.addEventListener("click", () => busy(fillBtn, () => fill(entry), "Filling…"));
     li.append(fillBtn);
   }
   return li;
@@ -156,24 +162,38 @@ async function openEditor(entry) {
   // site and email are the key of a login, so only the password changes on edit
   $("f-site").readOnly = $("f-email").readOnly = Boolean(entry);
   show("editor");
-  if (!entry) {
-    const { email } = await guard(api("/entries/email"));
-    if (!$("f-email").value) $("f-email").value = email;
-  }
   (entry ? $("f-password") : $("f-site")).focus();
+  // prefill the last used email when it arrives, without holding up the form
+  if (!entry) {
+    api("/entries/email")
+      .then(({ email }) => {
+        if (!$("f-email").value && !$("f-email").readOnly) $("f-email").value = email;
+      })
+      .catch(() => {});
+  }
 }
 
-$("unlock").addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({ type: "openUnlock" });
-  window.close();
-});
+$("unlock").addEventListener("click", (e) =>
+  busy(
+    e.currentTarget,
+    async () => {
+      $("locked-error").textContent = "";
+      const res = await chrome.runtime.sendMessage({ type: "openUnlock", tabId: tab?.id }).catch((err) => ({ error: err.message }));
+      if (res?.error) $("locked-error").textContent = res.error;
+      else window.close();
+    },
+    "Opening Touch ID…",
+  ),
+);
 
-$("lock").addEventListener("click", async () => {
-  await api("/auth/logout", { method: "POST" }).catch(() => {});
-  await clearToken();
-  entries = [];
-  show("locked");
-});
+$("lock").addEventListener("click", (e) =>
+  busy(e.currentTarget, async () => {
+    await api("/auth/logout", { method: "POST" }).catch(() => {});
+    await clearToken();
+    entries = [];
+    show("locked");
+  }),
+);
 
 $("search").addEventListener("input", render);
 $("add").addEventListener("click", () => openEditor());
@@ -183,27 +203,49 @@ $("reveal").addEventListener("click", () => {
   $("f-password").type = $("f-password").type === "password" ? "text" : "password";
 });
 
-$("generate").addEventListener("click", async () => {
-  const { password } = await guard(api("/entries/generate", { method: "POST", body: { length: 20 } }));
-  $("f-password").value = password;
-  $("f-password").type = "text";
+$("generate").addEventListener("click", (e) =>
+  busy(e.currentTarget, async () => {
+    const { password } = await guard(api("/entries/generate", { method: "POST", body: { length: 20 } }));
+    $("f-password").value = password;
+    $("f-password").type = "text";
+  }).catch(() => {}),
+);
+
+$("form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  $("form-error").textContent = "";
+  busy(
+    $("save"),
+    async () => {
+      try {
+        await guard(
+          api("/entries", {
+            method: "POST",
+            body: { url: siteOf($("f-site").value), email: $("f-email").value.trim(), password: $("f-password").value },
+          }),
+        );
+        await guard(load());
+        show("vault");
+        toast("Saved");
+      } catch (e) {
+        if (!e.locked) $("form-error").textContent = e.message;
+      }
+    },
+    "Saving…",
+  );
 });
 
-$("form").addEventListener("submit", async (event) => {
-  event.preventDefault();
+// the session can change while the popup is open: backend restarted, or unlocked elsewhere
+chrome.storage.session.onChanged.addListener(async ({ token }) => {
+  if (!token) return;
+  if (!token.newValue) {
+    entries = [];
+    return show("locked");
+  }
   try {
-    await guard(
-      api("/entries", {
-        method: "POST",
-        body: { url: siteOf($("f-site").value), email: $("f-email").value.trim(), password: $("f-password").value },
-      }),
-    );
     await load();
     show("vault");
-    toast("Saved");
-  } catch (e) {
-    $("form-error").textContent = e.message;
-  }
+  } catch {}
 });
 
 // start

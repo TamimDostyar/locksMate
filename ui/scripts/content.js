@@ -50,6 +50,25 @@
     .text small { color: var(--muted); font-size: 12px; }
     .sep { height: 1px; background: var(--border); margin: 4px 6px; }
     .msg { padding: 14px 12px; color: var(--muted); }
+    .overlay {
+      --bg: #fff; --text: #17171c;
+      position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center;
+      background: rgb(0 0 0 / 0.4); pointer-events: auto;
+    }
+    @media (prefers-color-scheme: dark) { .overlay { --bg: #17171c; --text: #f2f2f5; } }
+    .overlay[hidden] { display: none; }
+    .dialog {
+      position: relative; width: 380px; height: 300px; max-width: calc(100vw - 32px);
+      border-radius: 14px; overflow: hidden; background: var(--bg);
+      box-shadow: 0 24px 60px rgb(0 0 0 / 0.35);
+    }
+    .dialog iframe { width: 100%; height: 100%; border: 0; display: block; }
+    .close {
+      position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; border: none;
+      border-radius: 6px; background: none; color: var(--text); font-size: 20px; line-height: 1;
+      cursor: pointer; opacity: 0.6;
+    }
+    .close:hover { opacity: 1; }
   `;
   const KEY_ICON =
     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 8.8-8.8M16 7l3 3M18 5l2 2"/></svg>';
@@ -62,10 +81,18 @@
     <div class="wrap" hidden>
       <button class="key" title="LocksMate">${KEY_ICON}</button>
       <div class="panel" hidden></div>
+    </div>
+    <div class="overlay" hidden>
+      <div class="dialog">
+        <iframe title="Unlock LocksMate" allow="publickey-credentials-get; publickey-credentials-create"></iframe>
+        <button class="close" title="Close">&times;</button>
+      </div>
     </div>`;
   const wrap = root.querySelector(".wrap");
   const keyButton = root.querySelector(".key");
   const panel = root.querySelector(".panel");
+  const overlay = root.querySelector(".overlay");
+  const unlockFrame = root.querySelector("iframe");
   document.documentElement.append(host);
 
   let field = null;
@@ -192,29 +219,62 @@
     return p;
   }
 
+  function unlockItem() {
+    const list = document.createElement("ul");
+    list.append(
+      item({
+        label: "Unlock LocksMate",
+        sub: "With Touch ID",
+        avatar: LOCK_ICON,
+        cls: "gen",
+        onClick: () =>
+          act("Opening Touch ID…", async () => {
+            const res = await send({ type: "unlock" });
+            if (res.error) throw new Error(res.error);
+            panel.hidden = true;
+          }),
+      }),
+    );
+    return list;
+  }
+
+  // one panel action at a time, with feedback while it runs and the error if it fails
+  let pending = false;
+  async function act(text, fn) {
+    if (pending) return;
+    pending = true;
+    renderPanel([message(text)]);
+    try {
+      await fn();
+    } catch (e) {
+      if (!panel.hidden) renderPanel([message(e.message)]);
+    } finally {
+      pending = false;
+    }
+  }
+
+  // fill or generate: locked shows unlock again, an error stays visible
+  const fillWith = (anchor, request, text) =>
+    act(text, async () => {
+      const res = await send(request);
+      if (res.locked) return renderPanel([unlockItem()]);
+      if (res.error || !res.password) throw new Error(res.error ?? "Nothing to fill");
+      fillForm(anchor, res.email, res.password);
+      hide();
+    });
+
+  let panelRequest = 0;
   async function openPanel() {
     const anchor = field;
+    const request = ++panelRequest;
+    pending = false;
     panel.hidden = false;
     renderPanel([message("Loading…")]);
     const res = await send({ type: "logins" });
-    if (field !== anchor) return;
+    // a newer open, or the user moved on, wins over this answer
+    if (field !== anchor || request !== panelRequest || panel.hidden) return;
 
-    if (res.locked) {
-      const list = document.createElement("ul");
-      list.append(
-        item({
-          label: "Unlock LocksMate",
-          sub: "With Touch ID",
-          avatar: LOCK_ICON,
-          cls: "gen",
-          onClick: () => {
-            send({ type: "unlock" });
-            hide();
-          },
-        }),
-      );
-      return renderPanel([list]);
-    }
+    if (res.locked) return renderPanel([unlockItem()]);
     if (res.error) return renderPanel([message(res.error)]);
 
     const list = document.createElement("ul");
@@ -224,11 +284,7 @@
           label: login.email || "(no username)",
           sub: "Fill this login",
           avatar: (login.email || "?")[0],
-          onClick: async () => {
-            const creds = await send({ type: "fill", id: login.id });
-            if (creds.password) fillForm(anchor, creds.email, creds.password);
-            hide();
-          },
+          onClick: () => fillWith(anchor, { type: "fill", id: login.id }, "Filling…"),
         }),
       );
     }
@@ -243,11 +299,7 @@
         sub: res.logins.length ? "New account or password change" : "Fills and saves it to your vault",
         avatar: KEY_ICON,
         cls: "gen",
-        onClick: async () => {
-          const creds = await send({ type: "generate" });
-          if (creds.password) fillForm(anchor, creds.email, creds.password);
-          hide();
-        },
+        onClick: () => fillWith(anchor, { type: "generate" }, "Generating password…"),
       }),
     );
     renderPanel([list]);
@@ -271,7 +323,9 @@
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") panel.hidden = true;
+    if (e.key !== "Escape") return;
+    panel.hidden = true;
+    if (!overlay.hidden) hideUnlock();
   });
 
   addEventListener("scroll", place, { capture: true, passive: true });
@@ -279,8 +333,38 @@
 
   // ---------- filling from the toolbar popup ----------
 
+  // ---------- unlock dialog on top of the page ----------
+
+  // the dialog is LocksMate's own unlock page in a frame, the website can't read or script it
+  function showUnlock(nonce) {
+    panel.hidden = true;
+    // already open: reloading would cancel a Touch ID prompt that's in progress
+    if (!overlay.hidden) return true;
+    unlockFrame.src = `${chrome.runtime.getURL("pages/unlock.html")}#${nonce}`;
+    overlay.hidden = false;
+    return true;
+  }
+
+  // Touch ID only prompts in a focused frame
+  unlockFrame.addEventListener("load", () => !overlay.hidden && unlockFrame.focus());
+
+  function hideUnlock() {
+    overlay.hidden = true;
+    unlockFrame.src = "about:blank";
+  }
+
+  root.querySelector(".close").addEventListener("click", (e) => e.isTrusted && hideUnlock());
+  overlay.addEventListener("click", (e) => e.isTrusted && e.target === overlay && hideUnlock());
+
   chrome.runtime.onMessage.addListener((message, sender, reply) => {
-    if (sender.id !== chrome.runtime.id || message.type !== "fillCredentials") return;
+    if (sender.id !== chrome.runtime.id) return;
+    if (message.type === "showUnlock") return reply(showUnlock(message.nonce));
+    if (message.type === "unlocked") {
+      hideUnlock();
+      if (field) openPanel();
+      return reply(true);
+    }
+    if (message.type !== "fillCredentials") return;
     const here = location.hostname.replace(/^www\./, "");
     if (here !== message.site && !here.endsWith(`.${message.site}`)) return reply(false);
     const target = field ?? passwordsIn(document)[0];

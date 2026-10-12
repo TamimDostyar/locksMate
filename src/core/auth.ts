@@ -21,12 +21,29 @@ const KEY_FILE = join(homedir(), ".locksmate", "vault.key");
 // Chrome uses the whole extension origin as the RP ID, not just the extension id
 const rpIdOf = (origin: string) => origin;
 
+type ClientData = { challenge?: string; crossOrigin?: boolean; topOrigin?: string };
+
+function clientDataOf(credential: { response?: { clientDataJSON?: string } } | undefined): ClientData {
+    try {
+        return JSON.parse(Buffer.from(credential?.response?.clientDataJSON ?? "", "base64url").toString("utf8"));
+    } catch {
+        return {};
+    }
+}
+
+// unlock runs inside whatever page the user is on, so Touch ID reports that page as the top origin
+function topOriginOf(credential: { response?: { clientDataJSON?: string } } | undefined): string | undefined {
+    const data = clientDataOf(credential);
+    return data.crossOrigin && typeof data.topOrigin === "string" ? data.topOrigin : undefined;
+}
+
 export class AuthRoutes {
     private readonly router = express.Router();
     private readonly dataM = new DataManager();
     private readonly passM = new PasswordManager();
     private master: Master | undefined;
-    private challenge: { value: string; origin: string; expires: number } | undefined;
+    // several unlock attempts can be open at once (popup window, page overlay), each keeps its own challenge
+    private readonly challenges = new Map<string, { origin: string; expires: number }>();
     private fails = 0;
     private lockedUntil = 0;
 
@@ -79,12 +96,12 @@ export class AuthRoutes {
             },
             extensions: { prf: {} } as Record<string, unknown>,
         });
-        this.challenge = { value: options.challenge, origin, expires: Date.now() + CHALLENGE_MS };
+        this.addChallenge(options.challenge, origin);
         res.json(options);
     }
 
     private async setupVerify(req: Request, res: Response): Promise<void> {
-        const challenge = this.takeChallenge();
+        const challenge = this.takeChallenge(req.body?.credential);
         if (this.master || !challenge || challenge.origin !== req.get("origin")) {
             res.status(400).json({ error: "Setup expired, try again" });
             return;
@@ -132,7 +149,7 @@ export class AuthRoutes {
             // Touch ID returns a secret for this salt, the vault key is derived from it
             extensions: { prf: { eval: { first: this.master.salt } } } as Record<string, unknown>,
         });
-        this.challenge = { value: options.challenge, origin: this.master.origin, expires: Date.now() + CHALLENGE_MS };
+        this.addChallenge(options.challenge, this.master.origin);
         res.json(options);
     }
 
@@ -143,7 +160,7 @@ export class AuthRoutes {
         }
         const { credential, prf } = req.body ?? {};
         const master = this.master;
-        const challenge = this.takeChallenge();
+        const challenge = this.takeChallenge(credential);
         if (!master || !challenge) {
             res.status(400).json({ error: "Unlock expired, try again" });
             return;
@@ -154,6 +171,7 @@ export class AuthRoutes {
             expectedChallenge: challenge.value,
             expectedOrigin: master.origin,
             expectedRPID: rpIdOf(master.origin),
+            ...(topOriginOf(credential) ? { expectedTopOrigin: topOriginOf(credential)! } : {}),
             credential: {
                 id: master.credentialId,
                 publicKey: new Uint8Array(Buffer.from(master.publicKey, "base64")),
@@ -200,10 +218,19 @@ export class AuthRoutes {
         return readFileSync(KEY_FILE);
     }
 
-    private takeChallenge() {
-        const challenge = this.challenge;
-        this.challenge = undefined;
-        return challenge && challenge.expires > Date.now() ? challenge : undefined;
+    private addChallenge(value: string, origin: string): void {
+        const now = Date.now();
+        for (const [key, { expires }] of this.challenges) if (expires <= now) this.challenges.delete(key);
+        this.challenges.set(value, { origin, expires: now + CHALLENGE_MS });
+    }
+
+    // the challenge Touch ID signed, each one works once
+    private takeChallenge(credential: { response?: { clientDataJSON?: string } } | undefined) {
+        const value = clientDataOf(credential).challenge;
+        const challenge = value ? this.challenges.get(value) : undefined;
+        if (!value || !challenge) return undefined;
+        this.challenges.delete(value);
+        return challenge.expires > Date.now() ? { value, ...challenge } : undefined;
     }
 
     private fail(): void {

@@ -5,3 +5,4 @@ ca.pem
 dist
 ui.pem
 *.crx
+build

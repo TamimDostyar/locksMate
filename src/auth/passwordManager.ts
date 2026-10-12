@@ -1,25 +1,8 @@
-import * as argon2 from 'argon2';
 import generator from 'generate-password';
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
 
 
 export class PasswordManager{
-
-    async hashPassword(password: string): Promise<string>{
-        return argon2.hash(password);
-    }
-
-    async isVerified(storedHash:string, confirmPassword: string): Promise<boolean>{
-        try {
-
-            const result = await argon2.verify(storedHash, confirmPassword);
-            return result;
-        }catch {
-            console.log("something went wrong");
-            return false;
-        }
-    }
-
 
     async generatePassword(length: number = 10, wNumber: boolean = true, symbols: boolean = true):Promise<string>{
         try {

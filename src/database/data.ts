@@ -17,6 +17,19 @@ export type Master = {
     keyMode: KeyMode | null;
 };
 
+const config = {
+    user: database_user,
+    password: databasePassword,
+    host: database_Host,
+    port: Number(database_port),
+    database: databseName,
+    ssl: { ca: readFileSync(databaseCA, "utf8") },
+};
+
+// one pool for the whole host: a fresh TLS connection per query made every click slow
+const pool = new pg.Pool({ ...config, max: 5, idleTimeoutMillis: 5 * 60_000, connectionTimeoutMillis: 10_000 });
+pool.on("error", (e) => console.error("database connection dropped:", e.message));
+
 export class DataManager {
     private readonly createTable = `CREATE TABLE IF NOT EXISTS locks_mate (url TEXT, email TEXT, password TEXT)`;
     private readonly upgradeTable = `ALTER TABLE locks_mate
@@ -41,25 +54,12 @@ export class DataManager {
     private readonly updateCounter = `UPDATE locks_master SET counter = $1`;
     private readonly updateKeyMode = `UPDATE locks_master SET key_mode = $1`;
 
-    private readonly config = {
-        user: database_user,
-        password: databasePassword,
-        host: database_Host,
-        port: Number(database_port),
-        database: databseName,
-        ssl: { ca: readFileSync(databaseCA, "utf8") },
-    };
-
     async checkDBStatus(): Promise<boolean> {
-        const client = new pg.Client(this.config);
         try {
-            await client.connect();
-            await client.query("SELECT VERSION()");
+            await pool.query("SELECT VERSION()");
             return true;
         } catch {
             return false;
-        } finally {
-            await client.end().catch(() => {});
         }
     }
 
@@ -67,50 +67,26 @@ export class DataManager {
         if (!(await this.checkDBStatus())) {
             throw new Error("database unreachable");
         }
-        const client = new pg.Client(this.config);
-        try {
-            await client.connect();
-            await client.query(this.createTable);
-            await client.query(this.upgradeTable);
-            await client.query(this.createMasterTable);
-            await client.query(this.upgradeMasterTable);
-        } finally {
-            await client.end();
-        }
+        await this.run(this.createTable);
+        await this.run(this.upgradeTable);
+        await this.run(this.createMasterTable);
+        await this.run(this.upgradeMasterTable);
     }
 
     async insertIntoTable(url:string, email:string, password:string): Promise<void> {
-        if (!(await this.checkDBStatus())) {
-            throw new Error("database unreachable");
-        }
-        const client = new pg.Client(this.config);
-        try {
-            await client.connect();
-            const updated = await client.query(this.updateData, [url, email, password]);
-            if (updated.rowCount === 0) {
-                await client.query(this.insertData, [url, email, password]);
-            }
-        } finally {
-            await client.end();
+        const updated = await this.run(this.updateData, [url, email, password]);
+        if (updated.rowCount === 0) {
+            await this.run(this.insertData, [url, email, password]);
         }
     }
 
 
     // no url returns every entry
     async readFromTable(url?: string): Promise<{ id: number; url: string; email: string; password: string }[]> {
-        if (!(await this.checkDBStatus())) {
-            throw new Error("database unreachable");
-        }
-        const client = new pg.Client(this.config);
-        try {
-            await client.connect();
-            const result = url === undefined
-                ? await client.query(this.readAll)
-                : await client.query(this.readData, [url]);
-            return result.rows;
-        } finally {
-            await client.end();
-        }
+        const result = url === undefined
+            ? await this.run(this.readAll)
+            : await this.run(this.readData, [url]);
+        return result.rows;
     }
 
     async deleteEntry(id: number): Promise<void> {
@@ -146,13 +122,7 @@ export class DataManager {
         await this.run(this.updateCounter, [counter]);
     }
 
-    private async run(query: string, values: unknown[] = []) {
-        const client = new pg.Client(this.config);
-        try {
-            await client.connect();
-            return await client.query(query, values);
-        } finally {
-            await client.end();
-        }
+    private run(query: string, values: unknown[] = []) {
+        return pool.query(query, values);
     }
 }

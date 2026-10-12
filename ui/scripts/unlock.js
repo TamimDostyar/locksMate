@@ -31,22 +31,67 @@ async function unlock() {
   await setToken(token);
 }
 
+const embedded = window.top !== window;
 let registered;
 
-async function run() {
+async function done() {
+  if (embedded) await chrome.runtime.sendMessage({ type: "unlocked" });
+  else window.close();
+}
+
+// embedded unlock only works when LocksMate itself put it on the page
+async function allowed() {
+  if (!embedded) return true;
+  const nonce = location.hash.slice(1);
+  const { unlockNonces = [] } = await chrome.storage.session.get("unlockNonces");
+  if (!nonce || !unlockNonces.includes(nonce)) return false;
+  await chrome.storage.session.set({ unlockNonces: unlockNonces.filter((n) => n !== nonce) });
+  return true;
+}
+
+function errorText(e) {
+  if (e.name === "NotAllowedError") return "Touch ID was cancelled";
+  if (e.name === "InvalidStateError" || /pending/i.test(e.message)) return "Touch ID is already open";
+  return e.message;
+}
+
+const idleLabel = () => (registered === false ? "Set up with Touch ID" : "Unlock with Touch ID");
+
+async function loadStatus() {
+  ({ registered } = await api("/auth/status"));
+  if (!registered) {
+    $("title").textContent = "Set up LocksMate";
+    $("subtitle").textContent = "Your fingerprint becomes the only key to your vault.";
+  }
+  $("label").textContent = idleLabel();
+}
+
+let running = false;
+async function run({ auto = false } = {}) {
+  if (running) return;
+  running = true;
   $("error").textContent = "";
+  $("hint").textContent = "";
   $("submit").disabled = true;
+  $("label").textContent = "Waiting for Touch ID…";
   try {
+    if (registered === undefined) await loadStatus();
     if (!registered) {
       await setup();
       registered = true;
     }
     await unlock();
-    window.close();
+    $("label").textContent = "Unlocked";
+    await done();
   } catch (e) {
-    $("error").textContent = e.name === "NotAllowedError" ? "Touch ID was cancelled" : e.message;
+    // the auto prompt can be refused when this frame isn't focused yet, point at the button instead
+    if (auto && e.name === "NotAllowedError") $("hint").textContent = "Click the button to use Touch ID.";
+    else $("error").textContent = errorText(e);
+    $("submit").focus();
   } finally {
+    running = false;
     $("submit").disabled = false;
+    if ($("label").textContent !== "Unlocked") $("label").textContent = idleLabel();
   }
 }
 
@@ -55,20 +100,27 @@ $("unlock").addEventListener("submit", (event) => {
   run();
 });
 
-if (await getToken()) window.close();
+if (embedded) document.body.classList.add("embedded");
 
 $("submit").disabled = true;
+if (!(await allowed())) {
+  $("error").textContent = "Open LocksMate from the toolbar to unlock.";
+  throw new Error("unlock page opened outside LocksMate");
+}
+if (await getToken()) {
+  await done();
+  throw new Error("already unlocked");
+}
+
+$("label").textContent = "Connecting…";
 try {
-  ({ registered } = await api("/auth/status"));
+  await loadStatus();
   $("submit").disabled = false;
-  if (!registered) {
-    $("title").textContent = "Set up LocksMate";
-    $("subtitle").textContent = "Your fingerprint becomes the only key to your vault.";
-    $("label").textContent = "Set up with Touch ID";
-  } else {
-    // one click from the popup is enough, go straight to Touch ID
-    run();
-  }
+  // one click from the popup is enough, go straight to Touch ID
+  if (registered) run({ auto: true });
 } catch (e) {
-  $("error").textContent = `${e.message}. Start it with pnpm start, then reopen this window.`;
+  // the button retries the status check
+  $("error").textContent = e.message;
+  $("submit").disabled = false;
+  $("label").textContent = "Try again";
 }
