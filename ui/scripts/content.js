@@ -204,7 +204,7 @@
       list.append(
         item({
           label: "Unlock LocksMate",
-          sub: "Master password + Touch ID",
+          sub: "With Touch ID",
           avatar: LOCK_ICON,
           cls: "gen",
           onClick: () => {

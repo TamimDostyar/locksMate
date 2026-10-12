@@ -1,26 +1,31 @@
 import express from "express";
 import type { Request, Response } from "express";
-import { randomBytes, randomInt } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
     generateAuthenticationOptions, generateRegistrationOptions,
     verifyAuthenticationResponse, verifyRegistrationResponse,
 } from "@simplewebauthn/server";
 import { app, createSession, endSession, pinOrigin } from "./base.js";
 import { DataManager } from "../database/data.js";
-import type { Master } from "../database/data.js";
+import type { KeyMode, Master } from "../database/data.js";
 import { PasswordManager } from "../auth/passwordManager.js";
 
 const MAX_FAILS = 5;
 const LOCK_MS = 60_000;
 const CHALLENGE_MS = 2 * 60_000;
+const KEY_FILE = join(homedir(), ".locksmate", "vault.key");
 
-// unlocking needs all three: this extension (origin), Touch ID on this Mac, and the master password
+// Chrome uses the whole extension origin as the RP ID, not just the extension id
+const rpIdOf = (origin: string) => origin;
+
 export class AuthRoutes {
     private readonly router = express.Router();
     private readonly dataM = new DataManager();
     private readonly passM = new PasswordManager();
     private master: Master | undefined;
-    private setupCode: string | undefined;
     private challenge: { value: string; origin: string; expires: number } | undefined;
     private fails = 0;
     private lockedUntil = 0;
@@ -42,11 +47,10 @@ export class AuthRoutes {
         this.master = await this.dataM.readMaster();
         if (this.master) {
             pinOrigin(this.master.origin);
-            return;
+            console.log(`vault locked to ${this.master.origin}`);
+        } else {
+            console.log("vault not set up yet, open the extension to set it up with Touch ID");
         }
-        // shown only in this terminal, so only someone at this machine can set up the vault
-        this.setupCode = `${randomInt(1000, 10000)}-${randomInt(1000, 10000)}`;
-        console.log(`setup code: ${this.setupCode}`);
     }
 
     private status(_req: Request, res: Response): void {
@@ -54,7 +58,10 @@ export class AuthRoutes {
     }
 
     private async setupOptions(req: Request, res: Response): Promise<void> {
-        if (!this.checkSetupCode(req, res)) return;
+        if (this.master) {
+            res.status(409).json({ error: "Already set up" });
+            return;
+        }
         const origin = req.get("origin") ?? "";
         if (!origin.startsWith("chrome-extension://")) {
             res.status(400).json({ error: "Setup must be done from the extension" });
@@ -70,53 +77,47 @@ export class AuthRoutes {
                 userVerification: "required",
                 residentKey: "discouraged",
             },
+            extensions: { prf: {} } as Record<string, unknown>,
         });
         this.challenge = { value: options.challenge, origin, expires: Date.now() + CHALLENGE_MS };
         res.json(options);
     }
 
     private async setupVerify(req: Request, res: Response): Promise<void> {
-        if (!this.checkSetupCode(req, res)) return;
-        const { password, credential } = req.body;
-        if (typeof password !== "string" || password.length < 8) {
-            res.status(400).json({ error: "Master password must be at least 8 characters" });
-            return;
-        }
         const challenge = this.takeChallenge();
-        if (!challenge || challenge.origin !== req.get("origin")) {
+        if (this.master || !challenge || challenge.origin !== req.get("origin")) {
             res.status(400).json({ error: "Setup expired, try again" });
             return;
         }
         const result = await verifyRegistrationResponse({
-            response: credential,
+            response: req.body?.credential,
             expectedChallenge: challenge.value,
             expectedOrigin: challenge.origin,
-            expectedRPID: new URL(challenge.origin).hostname,
+            expectedRPID: rpIdOf(challenge.origin),
             requireUserVerification: true,
         }).catch((e: Error) => {
             console.error("touch id setup failed:", e.message);
             return { verified: false as const, reason: e.message };
         });
         if (!result.verified) {
-            res.status(400).json({ error: `Fingerprint check failed: ${"reason" in result ? result.reason : "not verified"}` });
+            res.status(400).json({ error: `Touch ID setup failed: ${"reason" in result ? result.reason : "not verified"}` });
             return;
         }
 
-        const { credential: cred } = result.registrationInfo;
-        const salt = randomBytes(16).toString("hex");
+        const { credential } = result.registrationInfo;
         const master: Master = {
-            hash: await this.passM.hashPassword(password),
-            salt,
-            credentialId: cred.id,
-            publicKey: Buffer.from(cred.publicKey).toString("base64"),
-            counter: cred.counter,
+            salt: randomBytes(32).toString("base64url"),
+            credentialId: credential.id,
+            publicKey: Buffer.from(credential.publicKey).toString("base64"),
+            counter: credential.counter,
             origin: challenge.origin,
+            keyMode: null,
         };
         await this.dataM.saveMaster(master);
         this.master = master;
-        this.setupCode = undefined;
         pinOrigin(master.origin);
-        res.status(201).json({ token: createSession(this.passM.deriveKey(password, salt)) });
+        console.log(`vault set up and locked to ${master.origin}`);
+        res.status(201).json({ registered: true });
     }
 
     private async loginOptions(_req: Request, res: Response): Promise<void> {
@@ -128,6 +129,8 @@ export class AuthRoutes {
             rpID: new URL(this.master.origin).hostname,
             allowCredentials: [{ id: this.master.credentialId }],
             userVerification: "required",
+            // Touch ID returns a secret for this salt, the vault key is derived from it
+            extensions: { prf: { eval: { first: this.master.salt } } } as Record<string, unknown>,
         });
         this.challenge = { value: options.challenge, origin: this.master.origin, expires: Date.now() + CHALLENGE_MS };
         res.json(options);
@@ -138,11 +141,11 @@ export class AuthRoutes {
             res.status(429).json({ error: "Too many attempts, wait a minute" });
             return;
         }
-        const { password, credential } = req.body;
+        const { credential, prf } = req.body ?? {};
         const master = this.master;
         const challenge = this.takeChallenge();
-        if (!master || !challenge || typeof password !== "string") {
-            res.status(400).json({ error: "Login expired, try again" });
+        if (!master || !challenge) {
+            res.status(400).json({ error: "Unlock expired, try again" });
             return;
         }
 
@@ -150,7 +153,7 @@ export class AuthRoutes {
             response: credential,
             expectedChallenge: challenge.value,
             expectedOrigin: master.origin,
-            expectedRPID: new URL(master.origin).hostname,
+            expectedRPID: rpIdOf(master.origin),
             credential: {
                 id: master.credentialId,
                 publicKey: new Uint8Array(Buffer.from(master.publicKey, "base64")),
@@ -158,37 +161,45 @@ export class AuthRoutes {
             },
             requireUserVerification: true,
         }).catch((e: Error) => {
-            // logged here only, the client just hears "wrong password or fingerprint"
-            console.error("touch id login failed:", e.message);
+            console.error("touch id unlock failed:", e.message);
             return undefined;
         });
-
-        if (!result?.verified || !(await this.passM.isVerified(master.hash, password))) {
+        if (!result?.verified) {
             this.fail();
-            res.status(401).json({ error: "Wrong password or fingerprint" });
+            res.status(401).json({ error: "Touch ID check failed" });
+            return;
+        }
+
+        const secret = typeof prf === "string" && prf ? Buffer.from(prf, "base64url") : undefined;
+        // the first unlock picks where the key comes from, and it never changes after
+        if (!master.keyMode) {
+            master.keyMode = secret ? "prf" : "file";
+            await this.dataM.saveKeyMode(master.keyMode);
+            console.log(`vault key from ${master.keyMode === "prf" ? "Touch ID" : KEY_FILE}`);
+        }
+        if (master.keyMode === "prf" && !secret) {
+            res.status(400).json({ error: "Touch ID didn't return the vault key, try again" });
             return;
         }
 
         this.fails = 0;
         master.counter = result.authenticationInfo.newCounter;
         await this.dataM.saveCounter(master.counter);
-        res.json({ token: createSession(this.passM.deriveKey(password, master.salt)) });
+        const key = this.passM.deriveKey(this.secretFor(master.keyMode, secret), master.salt);
+        res.json({ token: createSession(key) });
     }
 
-    private checkSetupCode(req: Request, res: Response): boolean {
-        if (Date.now() < this.lockedUntil) {
-            res.status(429).json({ error: "Too many attempts, wait a minute" });
-            return false;
+    // fallback for Macs whose Touch ID can't return a secret: a key file only this user can read
+    private secretFor(mode: KeyMode, prf: Buffer | undefined): Buffer {
+        if (mode === "prf" && prf) return prf;
+        if (!existsSync(KEY_FILE)) {
+            mkdirSync(join(homedir(), ".locksmate"), { recursive: true, mode: 0o700 });
+            writeFileSync(KEY_FILE, randomBytes(32), { mode: 0o600 });
         }
-        if (!this.setupCode || req.body?.code !== this.setupCode) {
-            this.fail();
-            res.status(401).json({ error: "Wrong setup code" });
-            return false;
-        }
-        return true;
+        chmodSync(KEY_FILE, 0o600);
+        return readFileSync(KEY_FILE);
     }
 
-    // challenges are single use
     private takeChallenge() {
         const challenge = this.challenge;
         this.challenge = undefined;

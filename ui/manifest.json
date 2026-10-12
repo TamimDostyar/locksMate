@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "LocksMate",
   "version": "1.2.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzC3tET+E/VDJtugpGc+Ez71YmrKVQ91I8lZno2Tc3wqVAhKEzhw3xA1Tkaoou5YNG0DyjtPqXW2AbYahGc8FQyq1LYsn0NoV/4UvDYMJagsoHZsWTZZwfhui2ZvVck4lonUUEGdRiMI1eTf9RUgsDWH77o7CAA90XTLqEsGv2R5asyP+ijjAY78nOV9f7nLtLgQ6RrQt1EvnKiBiBr3q2f4fOJ7WkqN7qhhLPl0NvCzssmM7SYW/78hfbwyVjxXRW2uby4V/q+pdOddsACyxZyUwLx0dIyIrvOfE9Aq2wZNMEPnqN+0JaL3WakbmhW/HcL80fuoqs9sfsDC+KsawIQIDAQAB",
   "description": "Simple password manager",
   "icons": {
     "16": "icons/icon16.png",

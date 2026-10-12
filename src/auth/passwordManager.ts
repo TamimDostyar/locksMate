@@ -1,6 +1,6 @@
 import * as argon2 from 'argon2';
 import generator from 'generate-password';
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
 
 
 export class PasswordManager{
@@ -37,9 +37,9 @@ export class PasswordManager{
         }
     }
 
-    // vault key comes from the master password, so the database alone can't be decrypted
-    deriveKey(masterPassword: string, salt: string): Buffer {
-        return scryptSync(masterPassword, salt, 32);
+    // vault key from a secret only Touch ID can produce, so the database alone can't be decrypted
+    deriveKey(secret: Buffer, salt: string): Buffer {
+        return Buffer.from(hkdfSync('sha256', secret, salt, 'locksmate vault key', 32));
     }
 
     // stored as iv:tag:data (hex)

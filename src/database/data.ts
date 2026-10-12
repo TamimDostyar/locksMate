@@ -6,13 +6,15 @@ import { readFileSync } from "node:fs";
 
 import pg from "pg";
 
+export type KeyMode = "prf" | "file";
+
 export type Master = {
-    hash: string;
     salt: string;
     credentialId: string;
     publicKey: string;
     counter: number;
     origin: string;
+    keyMode: KeyMode | null;
 };
 
 export class DataManager {
@@ -32,10 +34,12 @@ export class DataManager {
         ADD COLUMN IF NOT EXISTS credential_id TEXT,
         ADD COLUMN IF NOT EXISTS public_key TEXT,
         ADD COLUMN IF NOT EXISTS counter BIGINT,
-        ADD COLUMN IF NOT EXISTS origin TEXT`;
-    private readonly insertMaster = `INSERT INTO locks_master (hash, salt, credential_id, public_key, counter, origin) VALUES ($1, $2, $3, $4, $5, $6)`;
-    private readonly selectMaster = `SELECT hash, salt, credential_id, public_key, counter, origin FROM locks_master LIMIT 1`;
+        ADD COLUMN IF NOT EXISTS origin TEXT,
+        ADD COLUMN IF NOT EXISTS key_mode TEXT`;
+    private readonly insertMaster = `INSERT INTO locks_master (salt, credential_id, public_key, counter, origin) VALUES ($1, $2, $3, $4, $5)`;
+    private readonly selectMaster = `SELECT salt, credential_id, public_key, counter, origin, key_mode FROM locks_master LIMIT 1`;
     private readonly updateCounter = `UPDATE locks_master SET counter = $1`;
+    private readonly updateKeyMode = `UPDATE locks_master SET key_mode = $1`;
 
     private readonly config = {
         user: database_user,
@@ -75,7 +79,6 @@ export class DataManager {
         }
     }
 
-    // one entry per site + email, saving again replaces the password
     async insertIntoTable(url:string, email:string, password:string): Promise<void> {
         if (!(await this.checkDBStatus())) {
             throw new Error("database unreachable");
@@ -119,20 +122,24 @@ export class DataManager {
     }
 
     async saveMaster(m: Master): Promise<void> {
-        await this.run(this.insertMaster, [m.hash, m.salt, m.credentialId, m.publicKey, m.counter, m.origin]);
+        await this.run(this.insertMaster, [m.salt, m.credentialId, m.publicKey, m.counter, m.origin]);
     }
 
     async readMaster(): Promise<Master | undefined> {
         const row = (await this.run(this.selectMaster)).rows[0];
         if (!row?.credential_id) return undefined;
         return {
-            hash: row.hash,
             salt: row.salt,
             credentialId: row.credential_id,
             publicKey: row.public_key,
             counter: Number(row.counter),
             origin: row.origin,
+            keyMode: row.key_mode,
         };
+    }
+
+    async saveKeyMode(mode: KeyMode): Promise<void> {
+        await this.run(this.updateKeyMode, [mode]);
     }
 
     async saveCounter(counter: number): Promise<void> {
