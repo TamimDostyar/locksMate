@@ -1,3 +1,7 @@
 node_modules
 .env
 ./.env
+ca.pem
+dist
+ui.pem
+*.crx
